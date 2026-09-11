@@ -1,0 +1,20 @@
+<step title="Incoming Request" date="2026-09-11T11:46:02.558" instance="791df6" url="/api/publish?type=zip&amp;async=False" method="POST" type="request" pid="831,1,16" Accept="*/*" Host="ksl-payments-api.scm.azurewebsites.net" User-Agent="AZURECLI/2.88.0 (MSI)" Accept-Encoding="gzip, deflate, zstd" Authorization="Bea..." Cache-Control="no-cache" Content-Type="application/octet-stream" Cookie="ARRAffinity=791df640c4998165c0f3cc79d8e7957b68a4a3f49b5bf2d86e683d0c872448ea; ARRAffinitySameSite=791df640c4998165c0f3cc79d8e7957b68a4a3f49b5bf2d86e683d0c872448ea" Content-Length="24903" x-ms-client-request-id="55e1ff16-add6-11f1-bc34-105badafb952" x-ms-artifact-checksum="c77a3c542b245c58a9463ad5ee2ee7e0f7fd1846d705af6f5ad3e5201bf14a3f" X-ARR-LOG-ID="55e1ff16-add6-11f1-bc34-105badafb952" CLIENT-IP="41.90.137.235:4152" X-SITE-DEPLOYMENT-ID="ksl-payments-api" WAS-DEFAULT-HOSTNAME="ksl-payments-api.scm.azurewebsites.net" X-Forwarded-Proto="https" X-AppService-Proto="https" X-Forwarded-TlsVersion="1.3" X-WAWS-Unencoded-URL="/api/publish?type=zip&amp;async=False" X-Client-IP="41.90.137.235" X-Client-Port="4152" >
+  <step title="OneDeploy" date="2026-09-11T11:46:02.657" >
+    <step title="None repository commit" date="2026-09-11T11:46:02.676" >
+      <step title="Commit id: 0128e74a-f010-4af6-86b9-1af4017b0249" date="2026-09-11T11:46:02.705" Message="N/A" AuthorName="N/A" AuthorEmail="N/A" /><!-- duration: 32ms -->
+    </step><!-- duration: 70ms -->
+    <step title="Starting PushDeployAsync" date="2026-09-11T11:46:02.834" /><!-- duration: 51ms -->
+    <step title="Writing artifact to /tmp/zipdeploy/75e17534-f0fe-4f90-8554-f4d742fc5395.zip" date="2026-09-11T11:46:03.204" >
+      <step title="Writing multipart request body to /tmp/zipdeploy/75e17534-f0fe-4f90-8554-f4d742fc5395.zip" date="2026-09-11T11:46:03.324" /><!-- duration: 129ms -->
+      <step title="Writing zip file to /tmp/zipdeploy/75e17534-f0fe-4f90-8554-f4d742fc5395.zip" date="2026-09-11T11:46:03.520" /><!-- duration: 109ms -->
+    </step><!-- duration: 613ms -->
+    <step title="None repository commit" date="2026-09-11T11:46:04.856" >
+      <step title="Commit id: 0128e74a-f010-4af6-86b9-1af4017b0249" date="2026-09-11T11:46:05.313" Message="N/A" AuthorName="N/A" AuthorEmail="N/A" /><!-- duration: 11ms -->
+    </step><!-- duration: 579ms -->
+    <step title="Attempting to fetch target branch HEAD" date="2026-09-11T11:46:05.454" /><!-- duration: 421ms -->
+    <step title="Acquiring Deployment Lock" date="2026-09-11T11:46:05.887" /><!-- duration: 69ms -->
+    <step title="Cannot Acquire Deployment Lock already held" date="2026-09-11T11:46:06.055" /><!-- duration: 22ms -->
+    <step title="There is a deployment currently in progress. Please try again when it completes." date="2026-09-11T11:46:06.225" /><!-- duration: 10ms -->
+  </step><!-- duration: 4205ms -->
+  <step title="Outgoing response" date="2026-09-11T11:46:07.014" type="response" statusCode="409" statusText="Conflict" /><!-- duration: 100ms -->
+</step><!-- duration: 4664ms -->

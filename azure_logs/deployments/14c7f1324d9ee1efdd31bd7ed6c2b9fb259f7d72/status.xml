@@ -1,0 +1,20 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<deployment>
+  <id>14c7f1324d9ee1efdd31bd7ed6c2b9fb259f7d72</id>
+  <author>Paul</author>
+  <deployer>GitHub</deployer>
+  <authorEmail>vinwakolipaul@gmail.com</authorEmail>
+  <message>feat: initial mpesa stk push backend microservice</message>
+  <progress></progress>
+  <status>Failed</status>
+  <statusText>Deployment has been stopped due to SCM container restart. The restart can happen due to a management operation on site. Do not perform a management operation and a deployment operation in quick succession. Adding a small delay can help avoid any conflicts.</statusText>
+  <lastSuccessEndTime />
+  <receivedTime>2026-09-11T11:44:25.8285639Z</receivedTime>
+  <startTime>2026-09-11T11:44:28.3106207Z</startTime>
+  <endTime>2026-09-11T11:58:20.9278136Z</endTime>
+  <complete>True</complete>
+  <is_temp>False</is_temp>
+  <is_readonly>False</is_readonly>
+  <containerId>3fe5fd03c3b7</containerId>
+  <buildSummary />
+</deployment>
