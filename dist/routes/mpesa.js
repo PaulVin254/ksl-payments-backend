@@ -199,3 +199,69 @@ mpesaRouter.get("/status/:checkoutRequestId", async (req, res) => {
         res.status(500).json({ success: false, error: error.message });
     }
 });
+/**
+ * POST /api/mpesa/simulate-success
+ * Simulates a successful Daraja callback for testing in Sandbox
+ */
+mpesaRouter.post("/simulate-success", async (req, res) => {
+    try {
+        const { checkoutRequestId } = req.body;
+        if (!checkoutRequestId) {
+            res.status(400).json({ success: false, error: "checkoutRequestId is required" });
+            return;
+        }
+        logEvent("INFO", `Simulating successful M-Pesa callback for CheckoutRequestID: ${checkoutRequestId}`, undefined, "SIMULATION");
+        // Generate random M-Pesa receipt e.g. TST8291038
+        const mockReceipt = `TST${Math.random().toString(36).substring(2, 9).toUpperCase()}`;
+        const transactionDate = new Date().toISOString().replace(/[-:T.Z]/g, "").slice(0, 14);
+        // 1. Update Supabase record to verified
+        const { data: updatedRecord, error: updateError } = await supabaseAdmin
+            .from("payment_confirmations")
+            .update({
+            status: "verified",
+            mpesa_receipt: mockReceipt,
+            mpesa_code: mockReceipt,
+            admin_notes: `Verified via Sandbox Simulation. TransDate: ${transactionDate}`,
+        })
+            .eq("checkout_request_id", checkoutRequestId)
+            .select()
+            .single();
+        if (updateError) {
+            logEvent("ERROR", "Failed to update Supabase record in simulation", updateError, "SIMULATION");
+            res.status(500).json({ success: false, error: updateError.message });
+            return;
+        }
+        logEvent("SUCCESS", `Simulation verified! Receipt: ${mockReceipt} for ${updatedRecord?.full_name}`, updatedRecord, "SIMULATION");
+        // 2. Trigger Brevo & WhatsApp automations if credentials configured
+        const groupLink = process.env.WHATSAPP_CLASS_GROUP_LINK || "https://chat.whatsapp.com/JHAPRzElBgQIUhwjHfxkP8";
+        if (updatedRecord?.email) {
+            sendWelcomeEmail({
+                studentName: updatedRecord.full_name,
+                studentEmail: updatedRecord.email,
+                amountPaid: updatedRecord.amount_paid || 500,
+                mpesaReceipt: mockReceipt,
+                paymentTier: updatedRecord.payment_tier || "full",
+                whatsAppGroupLink: groupLink,
+            }).catch((err) => logEvent("ERROR", "Brevo email error in simulation", err, "SIMULATION"));
+        }
+        if (updatedRecord?.phone_number) {
+            sendWhatsAppMessage({
+                phoneNumber: updatedRecord.phone_number,
+                studentName: updatedRecord.full_name,
+                amountPaid: updatedRecord.amount_paid || 500,
+                mpesaReceipt: mockReceipt,
+                whatsAppGroupLink: groupLink,
+            }).catch((err) => logEvent("ERROR", "WhatsApp error in simulation", err, "SIMULATION"));
+        }
+        res.status(200).json({
+            success: true,
+            message: "Simulation completed successfully",
+            mpesaReceipt: mockReceipt,
+            student: updatedRecord?.full_name,
+        });
+    }
+    catch (error) {
+        logEvent("ERROR", "Simulation route error", error.message, "SIMULATION");
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
