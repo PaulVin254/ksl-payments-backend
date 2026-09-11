@@ -9,7 +9,15 @@
     "build": "tsc",
     "start": "node dist/index.js"
   },
-  "keywords": ["mpesa", "daraja", "stk-push", "supabase", "brevo", "whatsapp", "azure"],
+  "keywords": [
+    "mpesa",
+    "daraja",
+    "stk-push",
+    "supabase",
+    "brevo",
+    "whatsapp",
+    "azure"
+  ],
   "author": "Paul - Ephphatha Sign Language",
   "license": "ISC",
   "dependencies": {
@@ -17,7 +25,8 @@
     "axios": "^1.7.9",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
-    "express": "^4.21.2"
+    "express": "^4.21.2",
+    "vite_react_shadcn_ts": "file:../ksl-bridge-builder"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",

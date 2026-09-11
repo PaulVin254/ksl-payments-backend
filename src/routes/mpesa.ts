@@ -4,6 +4,7 @@ import { supabaseAdmin } from "../services/supabase.js";
 import { formatPhoneNumber } from "../utils/mpesa.js";
 import { sendWelcomeEmail } from "../services/brevo.js";
 import { sendWhatsAppMessage } from "../services/whatsapp.js";
+import { logEvent } from "../index.js";
 
 export const mpesaRouter = Router();
 
@@ -15,20 +16,25 @@ mpesaRouter.post("/stkpush", async (req: Request, res: Response): Promise<void> 
   try {
     const { fullName, phoneNumber, email, amount, paymentTier } = req.body;
 
+    logEvent("INFO", "Initiating STK push request", {
+      fullName,
+      phone: phoneNumber,
+      amount,
+      tier: paymentTier,
+    }, "STK_PUSH");
+
     if (!fullName || !phoneNumber || !amount) {
-      res.status(400).json({
-        success: false,
-        error: "fullName, phoneNumber, and amount are required",
-      });
+      const err = "fullName, phoneNumber, and amount are required";
+      logEvent("WARN", "Validation failed for STK push", err, "STK_PUSH");
+      res.status(400).json({ success: false, error: err });
       return;
     }
 
     const numericAmount = Number(amount);
     if (isNaN(numericAmount) || numericAmount < 1) {
-      res.status(400).json({
-        success: false,
-        error: "Amount must be a valid positive number",
-      });
+      const err = "Amount must be a valid positive number";
+      logEvent("WARN", "Invalid amount provided", { amount }, "STK_PUSH");
+      res.status(400).json({ success: false, error: err });
       return;
     }
 
@@ -36,7 +42,9 @@ mpesaRouter.post("/stkpush", async (req: Request, res: Response): Promise<void> 
     let cleanPhone: string;
     try {
       cleanPhone = formatPhoneNumber(phoneNumber);
+      logEvent("INFO", `Normalized phone number: ${cleanPhone}`, undefined, "STK_PUSH");
     } catch (err: any) {
+      logEvent("WARN", "Phone number format error", err.message, "STK_PUSH");
       res.status(400).json({ success: false, error: err.message });
       return;
     }
@@ -51,6 +59,7 @@ mpesaRouter.post("/stkpush", async (req: Request, res: Response): Promise<void> 
     });
 
     // 3. Save initial pending transaction in Supabase
+    logEvent("INFO", `Saving pending record to Supabase (CheckoutRequestID: ${stkResponse.CheckoutRequestID})`, undefined, "DATABASE");
     const { error: dbError } = await supabaseAdmin
       .from("payment_confirmations")
       .insert({
@@ -68,7 +77,9 @@ mpesaRouter.post("/stkpush", async (req: Request, res: Response): Promise<void> 
       });
 
     if (dbError) {
-      console.error("⚠️ Supabase insert error on pending payment:", dbError);
+      logEvent("ERROR", "Supabase insert error on pending payment", dbError, "DATABASE");
+    } else {
+      logEvent("SUCCESS", "Pending payment row created in Supabase", undefined, "DATABASE");
     }
 
     res.status(200).json({
@@ -79,7 +90,7 @@ mpesaRouter.post("/stkpush", async (req: Request, res: Response): Promise<void> 
       customerMessage: stkResponse.CustomerMessage,
     });
   } catch (error: any) {
-    console.error("❌ Error in /stkpush endpoint:", error.message);
+    logEvent("ERROR", "Unhandled error in /stkpush endpoint", error.message, "STK_PUSH");
     res.status(500).json({
       success: false,
       error: error.message || "Failed to process STK push request",
@@ -98,14 +109,17 @@ mpesaRouter.post("/callback", async (req: Request, res: Response): Promise<void>
   try {
     const callbackData = req.body?.Body?.stkCallback;
     if (!callbackData) {
-      console.warn("⚠️ Received invalid callback body from Safaricom:", JSON.stringify(req.body));
+      logEvent("WARN", "Received empty or invalid callback body from Safaricom", req.body, "CALLBACK");
       return;
     }
 
     const { MerchantRequestID, CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } =
       callbackData;
 
-    console.log(`🔔 Daraja Callback received for CheckoutRequestID: ${CheckoutRequestID} (Code: ${ResultCode})`);
+    logEvent("INFO", `Daraja Callback received (ResultCode: ${ResultCode})`, {
+      CheckoutRequestID,
+      ResultDesc,
+    }, "CALLBACK");
 
     // ResultCode 0 means SUCCESS
     if (ResultCode === 0 && CallbackMetadata?.Item) {
@@ -115,6 +129,11 @@ mpesaRouter.post("/callback", async (req: Request, res: Response): Promise<void>
       const mpesaReceipt = String(getVal("MpesaReceiptNumber") || "");
       const amount = Number(getVal("Amount") || 0);
       const transactionDate = String(getVal("TransactionDate") || "");
+
+      logEvent("SUCCESS", `Payment completed by student! Receipt: ${mpesaReceipt}`, {
+        amount,
+        transactionDate,
+      }, "PAYMENT_CONFIRMED");
 
       // 1. Update Supabase record to verified
       const { data: updatedRecord, error: updateError } = await supabaseAdmin
@@ -130,9 +149,9 @@ mpesaRouter.post("/callback", async (req: Request, res: Response): Promise<void>
         .single();
 
       if (updateError) {
-        console.error("❌ Failed to update Supabase record on success callback:", updateError);
+        logEvent("ERROR", "Failed to update Supabase record to verified", updateError, "DATABASE");
       } else {
-        console.log(`✅ Payment verified for ${updatedRecord?.full_name} (${mpesaReceipt})`);
+        logEvent("SUCCESS", `Supabase record updated for ${updatedRecord?.full_name}`, undefined, "DATABASE");
       }
 
       // 2. Trigger Post-Payment Automations (Brevo Email & Meta WhatsApp API)
@@ -140,7 +159,6 @@ mpesaRouter.post("/callback", async (req: Request, res: Response): Promise<void>
         process.env.WHATSAPP_CLASS_GROUP_LINK || "https://chat.whatsapp.com/JHAPRzElBgQIUhwjHfxkP8";
 
       if (updatedRecord) {
-        // Send Brevo Email
         if (updatedRecord.email) {
           sendWelcomeEmail({
             studentName: updatedRecord.full_name,
@@ -149,36 +167,33 @@ mpesaRouter.post("/callback", async (req: Request, res: Response): Promise<void>
             mpesaReceipt: mpesaReceipt,
             paymentTier: updatedRecord.payment_tier || "full",
             whatsAppGroupLink: groupLink,
-          }).catch((err) => console.error("Email send background error:", err));
+          }).catch((err) => logEvent("ERROR", "Brevo email send error", err, "BREVO"));
         }
 
-        // Send WhatsApp API Message
         sendWhatsAppMessage({
           phoneNumber: updatedRecord.phone_number,
           studentName: updatedRecord.full_name,
           amountPaid: updatedRecord.amount_paid || amount,
           mpesaReceipt: mpesaReceipt,
           whatsAppGroupLink: groupLink,
-        }).catch((err) => console.error("WhatsApp send background error:", err));
+        }).catch((err) => logEvent("ERROR", "WhatsApp send error", err, "WHATSAPP"));
       }
     } else {
-      // Payment failed or was cancelled by user
-      console.warn(`⚠️ Payment not completed. Code: ${ResultCode}, Reason: ${ResultDesc}`);
+      logEvent("WARN", `Payment cancelled or failed (Code: ${ResultCode})`, {
+        CheckoutRequestID,
+        ResultDesc,
+      }, "CALLBACK");
 
-      const { error: failUpdateError } = await supabaseAdmin
+      await supabaseAdmin
         .from("payment_confirmations")
         .update({
           status: "failed",
           admin_notes: `Failed: ${ResultDesc} (ResultCode: ${ResultCode})`,
         })
         .eq("checkout_request_id", CheckoutRequestID);
-
-      if (failUpdateError) {
-        console.error("Failed to update status to failed in Supabase:", failUpdateError);
-      }
     }
   } catch (error: any) {
-    console.error("❌ Error processing Daraja callback:", error);
+    logEvent("ERROR", "Error in Daraja callback processing", error.message, "CALLBACK");
   }
 });
 
@@ -201,10 +216,7 @@ mpesaRouter.get("/status/:checkoutRequestId", async (req: Request, res: Response
       return;
     }
 
-    res.status(200).json({
-      success: true,
-      transaction: data,
-    });
+    res.status(200).json({ success: true, transaction: data });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
   }
