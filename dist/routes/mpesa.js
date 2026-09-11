@@ -59,7 +59,7 @@ mpesaRouter.post("/stkpush", async (req, res) => {
             full_name: fullName,
             phone_number: cleanPhone,
             email: email || null,
-            payment_type: paymentTier === "micro" ? "deposit" : paymentTier || "full",
+            payment_type: paymentTier === "full" ? "full" : "deposit",
             payment_tier: paymentTier || "full",
             amount_paid: numericAmount,
             checkout_request_id: stkResponse.CheckoutRequestID,
