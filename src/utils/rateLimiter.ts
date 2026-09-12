@@ -1,9 +1,9 @@
-﻿/**
+/**
  * In-Memory Rate Limiting & Phone Cooldown Engine
- * Protects against:
- * 1. Denial-of-Wallet (Phone Bombing) harassment
- * 2. Safaricom Daraja API quota exhaustion
- * 3. Bot checkout spam
+ * Balanced for high conversion + robust abuse protection:
+ * 1. IP Anti-Bot Barrier: 50 requests per 10 mins (protects against DDoS without blocking shared Wi-Fi/CGNAT)
+ * 2. Phone Cooldown: 20 seconds (just enough for Safaricom prompt to arrive)
+ * 3. Instant Retry: Cooldown can be cleared immediately upon failure or retry
  */
 
 interface IpBucket {
@@ -26,7 +26,7 @@ setInterval(() => {
   }
 
   for (const [phone, timestamp] of phoneCooldownMap.entries()) {
-    if (now - timestamp > 60 * 1000) {
+    if (now - timestamp > 20 * 1000) {
       phoneCooldownMap.delete(phone);
     }
   }
@@ -39,9 +39,10 @@ export interface RateLimitResult {
 }
 
 /**
- * Enforces IP-based rate limit: max 5 requests per 10 minutes.
+ * Enforces IP-based rate limit: 50 requests per 10 minutes.
+ * High enough to never block innocent users on shared mobile/campus networks.
  */
-export function checkIpRateLimit(ip: string, maxRequests = 5, windowMs = 10 * 60 * 1000): RateLimitResult {
+export function checkIpRateLimit(ip: string, maxRequests = 50, windowMs = 10 * 60 * 1000): RateLimitResult {
   const now = Date.now();
   const cleanIp = ip.trim().toLowerCase();
 
@@ -59,7 +60,7 @@ export function checkIpRateLimit(ip: string, maxRequests = 5, windowMs = 10 * 60
     const retryAfter = Math.ceil((oldest + windowMs - now) / 1000);
     return {
       allowed: false,
-      reason: `Too many payment requests from this IP. Please wait ${retryAfter}s before retrying.`,
+      reason: "Too many payment requests from this network. Please wait a moment or pay directly via our manual PayBill.",
       retryAfterSeconds: retryAfter,
     };
   }
@@ -69,9 +70,9 @@ export function checkIpRateLimit(ip: string, maxRequests = 5, windowMs = 10 * 60
 }
 
 /**
- * Enforces Phone Cooldown: blocks multiple STK pushes to the same phone within 60 seconds.
+ * Enforces Phone Cooldown: blocks multiple STK pushes to the same phone within 20 seconds.
  */
-export function checkPhoneCooldown(cleanPhone: string, cooldownMs = 60 * 1000): RateLimitResult {
+export function checkPhoneCooldown(cleanPhone: string, cooldownMs = 20 * 1000): RateLimitResult {
   const now = Date.now();
   const lastTime = phoneCooldownMap.get(cleanPhone);
 
@@ -79,11 +80,26 @@ export function checkPhoneCooldown(cleanPhone: string, cooldownMs = 60 * 1000): 
     const remaining = Math.ceil((cooldownMs - (now - lastTime)) / 1000);
     return {
       allowed: false,
-      reason: `A payment prompt was recently sent to ${cleanPhone}. Please check your phone or wait ${remaining}s before requesting another prompt.`,
+      reason: "A payment prompt was just sent to your phone. Please check your screen or wait a few seconds before trying again.",
       retryAfterSeconds: remaining,
     };
   }
 
   phoneCooldownMap.set(cleanPhone, now);
   return { allowed: true };
+}
+
+/**
+ * Instantly clears cooldown for a specific phone number.
+ * Called when a transaction fails, wrong PIN is entered, or user clicks 'Try Again'.
+ */
+export function clearPhoneCooldown(cleanPhone: string): void {
+  phoneCooldownMap.delete(cleanPhone);
+}
+
+/**
+ * Clears IP rate limit history for a specific IP.
+ */
+export function clearIpRateLimit(ip: string): void {
+  ipLimitMap.delete(ip.trim().toLowerCase());
 }

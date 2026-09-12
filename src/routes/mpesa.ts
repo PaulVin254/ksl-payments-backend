@@ -4,7 +4,7 @@ import { supabaseAdmin } from "../services/supabase.js";
 import { formatPhoneNumber } from "../utils/mpesa.js";
 import { mapMpesaResultCode } from "../utils/mpesaErrors.js";
 import { handlePaymentSuccess } from "../services/postPayment.js";
-import { checkIpRateLimit, checkPhoneCooldown } from "../utils/rateLimiter.js";
+import { checkIpRateLimit, checkPhoneCooldown, clearPhoneCooldown } from "../utils/rateLimiter.js";
 import { logEvent } from "../index.js";
 
 export const mpesaRouter = Router();
@@ -13,8 +13,8 @@ export const mpesaRouter = Router();
  * POST /api/mpesa/stkpush
  * Initiates an M-Pesa STK Push to the student's mobile number.
  * Hardened with:
- * 1. IP Rate Limiting (max 5 requests per 10 mins)
- * 2. Phone Cooldown (blocks spamming prompt to same number within 60s)
+ * 1. Anti-Bot IP Rate Limiting (50 requests per 10 mins)
+ * 2. Phone Cooldown (20 seconds between prompts to the same phone)
  * 3. Server-side Tier Price Integrity (downgrades amounts < 10,000 to 'deposit' to prevent price tampering)
  */
 mpesaRouter.post("/stkpush", async (req: Request, res: Response): Promise<void> => {
@@ -28,7 +28,7 @@ mpesaRouter.post("/stkpush", async (req: Request, res: Response): Promise<void> 
       "STK_PUSH"
     );
 
-    // 1. IP Rate Limiting Guard
+    // 1. IP Rate Limiting Guard (50 requests / 10 min)
     const clientIp =
       (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
       req.ip ||
@@ -73,7 +73,7 @@ mpesaRouter.post("/stkpush", async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // 4. Phone Number Cooldown Guard (60s)
+    // 4. Phone Number Cooldown Guard (20s)
     const phoneLimit = checkPhoneCooldown(cleanPhone);
     if (!phoneLimit.allowed) {
       logEvent("WARN", `Phone cooldown active for ${cleanPhone}`, undefined, "SECURITY");
@@ -194,6 +194,27 @@ async function safeUpdatePayment(
 }
 
 /**
+ * POST /api/mpesa/clear-cooldown
+ * Clears the 20-second cooldown for a user who wants to retry immediately.
+ */
+mpesaRouter.post("/clear-cooldown", (req: Request, res: Response): void => {
+  try {
+    const { phoneNumber } = req.body;
+    if (phoneNumber) {
+      try {
+        const cleanPhone = formatPhoneNumber(phoneNumber);
+        clearPhoneCooldown(cleanPhone);
+      } catch {
+        clearPhoneCooldown(String(phoneNumber).trim());
+      }
+    }
+    res.status(200).json({ success: true, message: "Cooldown cleared" });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
  * POST /api/mpesa/callback
  * Webhook called by Safaricom Daraja when student completes/cancels the prompt.
  * Hardened with:
@@ -201,6 +222,7 @@ async function safeUpdatePayment(
  * 2. Strict Idempotency (skips duplicate processing)
  * 3. Active Gateway Query Verification (confirms success with Safaricom before marking verified)
  * 4. Replay Attack Protection (catches duplicate M-Pesa receipt collisions)
+ * 5. Instant Cooldown Reset on Failure (student can retry immediately)
  */
 mpesaRouter.post("/callback", async (req: Request, res: Response): Promise<void> => {
   // 1. Webhook Secret Token Authentication Guard
@@ -342,6 +364,11 @@ mpesaRouter.post("/callback", async (req: Request, res: Response): Promise<void>
         "CALLBACK"
       );
 
+      // Smart Cooldown Reset: Clear phone cooldown so student can retry immediately
+      if (existingRecord?.phone_number) {
+        clearPhoneCooldown(existingRecord.phone_number);
+      }
+
       await safeUpdatePayment(CheckoutRequestID, {
         status: "failed",
         result_code: mappedError.code,
@@ -426,6 +453,10 @@ mpesaRouter.get("/status/:checkoutRequestId", async (req: Request, res: Response
             // Reconcile definitive failure
             const mapped = mapMpesaResultCode(resCode, queryRes.ResultDesc);
             logEvent("WARN", `Active STK Query confirmed failure: ${mapped.category}`, queryRes, "RECONCILIATION");
+            
+            // Clear cooldown on failure so user can retry immediately
+            clearPhoneCooldown(data.phone_number);
+
             await safeUpdatePayment(checkoutRequestId, {
               status: "failed",
               result_code: mapped.code,
