@@ -4,6 +4,7 @@ import cors from "cors";
 import { mpesaRouter } from "./routes/mpesa.js";
 import { darajaService } from "./services/daraja.js";
 import { getSupabaseAdmin } from "./services/supabase.js";
+import { startReconciliationWorker } from "./services/reconciliationWorker.js";
 const app = express();
 const port = process.env.PORT || 8080;
 // Helper to mask PII (Kenyan phone numbers: e.g. 254712345678 -> 254712***678)
@@ -92,6 +93,8 @@ app.get("/health", (_req, res) => {
             callback_url: darajaService.callbackUrl || "NOT_SET",
             whatsapp_enabled: process.env.ENABLE_WHATSAPP === "true",
             admin_key_configured: Boolean(process.env.ADMIN_SECRET_KEY),
+            webhook_secret_configured: Boolean(process.env.DARAJA_WEBHOOK_SECRET),
+            reconciliation_worker: "active",
         },
         total_logged_events: liveLogs.length,
     });
@@ -275,6 +278,8 @@ app.use((_req, res) => {
     res.status(404).json({ error: "Endpoint not found" });
 });
 app.listen(port, () => {
+    // Start autonomous background reconciliation worker (2-min recurring sweep)
+    startReconciliationWorker();
     logEvent("INFO", `KSL Payments server running on port ${port}`, {
         port,
         nodeEnv: process.env.NODE_ENV,

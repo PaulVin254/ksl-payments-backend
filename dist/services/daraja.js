@@ -43,7 +43,15 @@ export class DarajaService {
             "bfb279f9aa9bdbcf158e97dd71a467cd2e0c893059b10f78e6b72ada1ed2c919").trim();
     }
     get callbackUrl() {
-        return (process.env.DARAJA_CALLBACK_URL || "").trim();
+        const raw = (process.env.DARAJA_CALLBACK_URL || "").trim();
+        if (!raw)
+            return "";
+        const secret = (process.env.DARAJA_WEBHOOK_SECRET || "ksl_dev_secret_2026").trim();
+        if (secret && !raw.includes("token=")) {
+            const sep = raw.includes("?") ? "&" : "?";
+            return `${raw}${sep}token=${encodeURIComponent(secret)}`;
+        }
+        return raw;
     }
     /**
      * TransactionType:

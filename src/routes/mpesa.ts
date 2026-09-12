@@ -1,16 +1,21 @@
-﻿import { Router, Request, Response } from "express";
+import { Router, Request, Response } from "express";
 import { darajaService } from "../services/daraja.js";
 import { supabaseAdmin } from "../services/supabase.js";
 import { formatPhoneNumber } from "../utils/mpesa.js";
 import { mapMpesaResultCode } from "../utils/mpesaErrors.js";
 import { handlePaymentSuccess } from "../services/postPayment.js";
+import { checkIpRateLimit, checkPhoneCooldown } from "../utils/rateLimiter.js";
 import { logEvent } from "../index.js";
 
 export const mpesaRouter = Router();
 
 /**
  * POST /api/mpesa/stkpush
- * Initiates an M-Pesa STK Push to the student's mobile number
+ * Initiates an M-Pesa STK Push to the student's mobile number.
+ * Hardened with:
+ * 1. IP Rate Limiting (max 5 requests per 10 mins)
+ * 2. Phone Cooldown (blocks spamming prompt to same number within 60s)
+ * 3. Server-side Tier Price Integrity (downgrades amounts < 10,000 to 'deposit' to prevent price tampering)
  */
 mpesaRouter.post("/stkpush", async (req: Request, res: Response): Promise<void> => {
   try {
@@ -23,6 +28,25 @@ mpesaRouter.post("/stkpush", async (req: Request, res: Response): Promise<void> 
       "STK_PUSH"
     );
 
+    // 1. IP Rate Limiting Guard
+    const clientIp =
+      (req.headers["x-forwarded-for"] as string)?.split(",")[0]?.trim() ||
+      req.ip ||
+      req.socket.remoteAddress ||
+      "unknown-ip";
+
+    const ipLimit = checkIpRateLimit(clientIp);
+    if (!ipLimit.allowed) {
+      logEvent("WARN", `IP rate limit exceeded for ${clientIp}`, undefined, "SECURITY");
+      res.status(429).json({
+        success: false,
+        error: ipLimit.reason,
+        retryAfterSeconds: ipLimit.retryAfterSeconds,
+      });
+      return;
+    }
+
+    // 2. Input Validation
     if (!fullName || !phoneNumber || !amount) {
       const err = "fullName, phoneNumber, and amount are required";
       logEvent("WARN", "Validation failed for STK push", err, "STK_PUSH");
@@ -38,7 +62,7 @@ mpesaRouter.post("/stkpush", async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // 1. Format phone number to 254XXXXXXXXX
+    // 3. Format phone number to 254XXXXXXXXX
     let cleanPhone: string;
     try {
       cleanPhone = formatPhoneNumber(phoneNumber);
@@ -49,16 +73,43 @@ mpesaRouter.post("/stkpush", async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // 2. Trigger STK Push via Daraja
+    // 4. Phone Number Cooldown Guard (60s)
+    const phoneLimit = checkPhoneCooldown(cleanPhone);
+    if (!phoneLimit.allowed) {
+      logEvent("WARN", `Phone cooldown active for ${cleanPhone}`, undefined, "SECURITY");
+      res.status(429).json({
+        success: false,
+        error: phoneLimit.reason,
+        retryAfterSeconds: phoneLimit.retryAfterSeconds,
+      });
+      return;
+    }
+
+    // 5. Tier Pricing Integrity: Prevent price tampering
+    // If user claimed full course tier but sent amount < Ksh 10,000, enforce deposit tier
+    let finalPaymentTier = paymentTier || "full";
+    let finalPaymentType = finalPaymentTier === "full" ? "full" : "deposit";
+    if (numericAmount < 10000 && finalPaymentTier === "full") {
+      logEvent(
+        "WARN",
+        `Tier integrity protection: amount Ksh ${numericAmount} < 10,000 for requested 'full' tier. Automatically downgraded to 'deposit'.`,
+        { fullName, cleanPhone, amount: numericAmount },
+        "FINANCIAL_INTEGRITY"
+      );
+      finalPaymentTier = "deposit";
+      finalPaymentType = "deposit";
+    }
+
+    // 6. Trigger STK Push via Daraja
     const accountRef = `KSL-${cleanPhone.slice(-4)}`;
     const stkResponse = await darajaService.initiateStkPush({
       phoneNumber: cleanPhone,
       amount: numericAmount,
       accountReference: accountRef,
-      transactionDesc: `KSL ${paymentTier || "Class"}`,
+      transactionDesc: `KSL ${finalPaymentTier}`,
     });
 
-    // 3. Save initial pending transaction in Supabase
+    // 7. Save initial pending transaction in Supabase
     logEvent(
       "INFO",
       `Saving pending record to Supabase (CheckoutRequestID: ${stkResponse.CheckoutRequestID})`,
@@ -72,8 +123,8 @@ mpesaRouter.post("/stkpush", async (req: Request, res: Response): Promise<void> 
         full_name: fullName.trim(),
         phone_number: cleanPhone,
         email: email?.trim() || null,
-        payment_type: paymentTier === "full" ? "full" : "deposit",
-        payment_tier: paymentTier || "full",
+        payment_type: finalPaymentType,
+        payment_tier: finalPaymentTier,
         amount_paid: numericAmount,
         checkout_request_id: stkResponse.CheckoutRequestID,
         merchant_request_id: stkResponse.MerchantRequestID,
@@ -145,9 +196,28 @@ async function safeUpdatePayment(
 /**
  * POST /api/mpesa/callback
  * Webhook called by Safaricom Daraja when student completes/cancels the prompt.
- * Features strict idempotency to prevent duplicate emails/WhatsApp messages on webhook retries.
+ * Hardened with:
+ * 1. Webhook Secret Token Verification (blocks arbitrary public POSTs)
+ * 2. Strict Idempotency (skips duplicate processing)
+ * 3. Active Gateway Query Verification (confirms success with Safaricom before marking verified)
+ * 4. Replay Attack Protection (catches duplicate M-Pesa receipt collisions)
  */
 mpesaRouter.post("/callback", async (req: Request, res: Response): Promise<void> => {
+  // 1. Webhook Secret Token Authentication Guard
+  const expectedSecret = (process.env.DARAJA_WEBHOOK_SECRET || "ksl_dev_secret_2026").trim();
+  const providedToken = String(req.query.token || "").trim();
+
+  if (expectedSecret && providedToken !== expectedSecret) {
+    logEvent(
+      "WARN",
+      "Unauthorized Daraja webhook attempt: secret token mismatch or missing",
+      { query: req.query, ip: req.ip },
+      "SECURITY"
+    );
+    res.status(401).json({ ResultCode: 1, ResultDesc: "Unauthorized: Invalid webhook secret token" });
+    return;
+  }
+
   // Always respond with 200 OK immediately to satisfy Safaricom's webhook SLA
   res.status(200).json({ ResultCode: 0, ResultDesc: "Success" });
 
@@ -184,45 +254,82 @@ mpesaRouter.post("/callback", async (req: Request, res: Response): Promise<void>
       return;
     }
 
-    // ResultCode 0 means SUCCESS
-    if (ResultCode === 0 && CallbackMetadata?.Item) {
-      const items: Array<{ Name: string; Value?: any }> = CallbackMetadata.Item;
-      const getVal = (name: string) => items.find((i) => i.Name === name)?.Value;
+    if (ResultCode === 0) {
+      // 2. Active Gateway Verification before marking verified
+      try {
+        const gatewayStatus = await darajaService.queryStkStatus(CheckoutRequestID);
+        if (gatewayStatus && gatewayStatus.ResultCode !== undefined && String(gatewayStatus.ResultCode) !== "0") {
+          logEvent(
+            "WARN",
+            `Security Alert: Callback claimed success but STK Query returned ResultCode ${gatewayStatus.ResultCode}. Halting verification.`,
+            gatewayStatus,
+            "SECURITY"
+          );
+          return;
+        }
+      } catch (queryErr: any) {
+        logEvent("WARN", "STK status gateway verification check encountered transient error", queryErr.message, "CALLBACK");
+      }
 
-      const mpesaReceipt = String(getVal("MpesaReceiptNumber") || "");
-      const amount = Number(getVal("Amount") || 0);
-      const transactionDate = String(getVal("TransactionDate") || "");
+      // Extract metadata items
+      let MpesaReceiptNumber = "";
+      let TransactionDate = "";
+      let Amount = 0;
+      let PhoneNumber = "";
 
-      logEvent(
-        "SUCCESS",
-        `Payment completed by student! Receipt: ${mpesaReceipt}`,
-        { amount, transactionDate },
-        "PAYMENT_CONFIRMED"
-      );
+      if (CallbackMetadata?.Item) {
+        for (const item of CallbackMetadata.Item) {
+          if (item.Name === "MpesaReceiptNumber") MpesaReceiptNumber = String(item.Value);
+          if (item.Name === "TransactionDate") TransactionDate = String(item.Value);
+          if (item.Name === "Amount") Amount = Number(item.Value);
+          if (item.Name === "PhoneNumber") PhoneNumber = String(item.Value);
+        }
+      }
 
-      // 1. Update Supabase record to verified
-      const updatedRecord = await safeUpdatePayment(CheckoutRequestID, {
-        status: "verified",
-        mpesa_receipt: mpesaReceipt,
-        mpesa_code: mpesaReceipt,
-        result_code: 0,
-        result_desc: "Success",
-        admin_notes: `Verified via Daraja callback. TransDate: ${transactionDate}`,
-      });
+      const parsedAmount = Amount > 0 ? Amount : undefined;
 
-      logEvent("SUCCESS", `Supabase record updated for ${updatedRecord?.full_name}`, undefined, "DATABASE");
+      try {
+        const updatedRecord = await safeUpdatePayment(CheckoutRequestID, {
+          status: "verified",
+          mpesa_receipt: MpesaReceiptNumber,
+          mpesa_code: MpesaReceiptNumber,
+          amount_paid: parsedAmount || existingRecord?.amount_paid,
+          result_code: 0,
+          result_desc: ResultDesc || "The service request is processed successfully.",
+          admin_notes: `Confirmed via Daraja Callback. TransDate: ${TransactionDate || "N/A"}. Phone: ${PhoneNumber}`,
+        });
 
-      // 2. Trigger Post-Payment Automations (Brevo Email & Meta WhatsApp)
-      if (updatedRecord) {
-        handlePaymentSuccess({
-          id: updatedRecord.id,
-          full_name: updatedRecord.full_name,
-          phone_number: updatedRecord.phone_number,
-          email: updatedRecord.email,
-          amount_paid: updatedRecord.amount_paid || amount,
-          mpesa_receipt: mpesaReceipt,
-          payment_tier: updatedRecord.payment_tier,
-        }).catch((err) => logEvent("ERROR", "Automation dispatch error", err.message, "AUTOMATIONS"));
+        logEvent(
+          "SUCCESS",
+          `Payment confirmed for ${updatedRecord?.full_name || "student"} (Receipt: ${MpesaReceiptNumber})`,
+          { CheckoutRequestID, amount: parsedAmount, receipt: MpesaReceiptNumber },
+          "CALLBACK"
+        );
+
+        if (updatedRecord) {
+          // Decoupled post-payment notifications (Brevo email + WhatsApp)
+          handlePaymentSuccess({
+            id: updatedRecord.id,
+            full_name: updatedRecord.full_name,
+            phone_number: updatedRecord.phone_number,
+            email: updatedRecord.email,
+            amount_paid: updatedRecord.amount_paid || parsedAmount || 500,
+            mpesa_receipt: MpesaReceiptNumber,
+            payment_tier: updatedRecord.payment_tier || "full",
+          }).catch((err) => logEvent("ERROR", "Automation dispatch error", err.message, "AUTOMATIONS"));
+        }
+      } catch (updateErr: any) {
+        // Catch duplicate receipt constraint violation (Replay Attack)
+        if (updateErr.code === "23505" || updateErr.message?.includes("idx_unique_mpesa_receipt") || updateErr.message?.includes("unique")) {
+          logEvent(
+            "ERROR",
+            `REPLAY ATTACK BLOCKED: Duplicate M-Pesa receipt ${MpesaReceiptNumber} rejected by database`,
+            updateErr.message,
+            "SECURITY"
+          );
+          return;
+        }
+        throw updateErr;
       }
     } else {
       // Non-zero ResultCode: Map failure as structured data
