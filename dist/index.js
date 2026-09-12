@@ -6,24 +6,44 @@ import { darajaService } from "./services/daraja.js";
 import { getSupabaseAdmin } from "./services/supabase.js";
 const app = express();
 const port = process.env.PORT || 8080;
+// Helper to mask PII (Kenyan phone numbers: e.g. 254712345678 -> 254712***678)
+function maskPii(str) {
+    return str.replace(/\b(254|0)([17]\d{2})(\d{3})(\d{3})\b/g, "$1$2***$4");
+}
 export const liveLogs = [];
 export function logEvent(level, message, details, tag = "GENERAL") {
+    let maskedDetails;
+    if (details) {
+        const raw = typeof details === "string" ? details : JSON.stringify(details, null, 2);
+        maskedDetails = maskPii(raw);
+    }
     const entry = {
         id: `${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
         time: new Date().toISOString(),
         level,
         tag,
-        message,
-        details: details ? (typeof details === "string" ? details : JSON.stringify(details, null, 2)) : undefined,
+        message: maskPii(message),
+        details: maskedDetails,
     };
     liveLogs.unshift(entry);
     if (liveLogs.length > 200)
         liveLogs.pop(); // keep last 200 entries
-    console.log(`[${entry.time}] [${level}] [${tag}] ${message}`, details ? details : "");
+    console.log(`[${entry.time}] [${level}] [${tag}] ${entry.message}`, maskedDetails ? maskedDetails : "");
 }
-// Enable CORS for all local and production origins
+// Strict CORS: Restrict to configured origins
+const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5173,http://localhost:8080,https://ephphathakenya.co.ke")
+    .split(",")
+    .map((o) => o.trim().replace(/\/$/, ""));
 app.use(cors({
-    origin: (origin, callback) => callback(null, true),
+    origin: (origin, callback) => {
+        if (!origin)
+            return callback(null, true);
+        const clean = origin.replace(/\/$/, "");
+        if (allowedOrigins.includes(clean) || process.env.NODE_ENV !== "production") {
+            return callback(null, true);
+        }
+        return callback(new Error(`Origin ${origin} not allowed by CORS`));
+    },
     credentials: true,
 }));
 app.use(express.json());
@@ -38,6 +58,16 @@ app.use((req, _res, next) => {
     }
     next();
 });
+// Admin Authorization Guard for sensitive endpoints
+function isAuthorizedAdmin(req) {
+    if (process.env.NODE_ENV !== "production")
+        return true;
+    const adminSecret = process.env.ADMIN_SECRET_KEY;
+    if (!adminSecret)
+        return true; // If not configured, allow with warning
+    const key = req.headers["x-admin-key"] || req.query.key;
+    return key === adminSecret;
+}
 // Health check endpoint
 app.get("/health", (_req, res) => {
     const hasDarajaKey = Boolean(process.env.DARAJA_CONSUMER_KEY);
@@ -49,21 +79,29 @@ app.get("/health", (_req, res) => {
         timestamp: new Date().toISOString(),
         uptime: Math.round(process.uptime()) + "s",
         service: "ksl-payments-backend",
-        environment: process.env.DARAJA_ENVIRONMENT || "sandbox",
+        environment: darajaService.environment,
         configuration: {
             daraja_consumer_key: hasDarajaKey ? "configured" : "MISSING",
             daraja_consumer_secret: hasDarajaSecret ? "configured" : "MISSING",
             supabase_service_role_key: hasSupabaseKey ? "configured" : "MISSING",
             brevo_api_key: hasBrevoKey ? "configured" : "MISSING",
-            shortcode: process.env.DARAJA_BUSINESS_SHORTCODE || "174379",
-            transaction_type: process.env.DARAJA_TRANSACTION_TYPE || "CustomerPayBillOnline",
-            callback_url: process.env.DARAJA_CALLBACK_URL || "NOT_SET",
+            shortcode: darajaService.shortcode,
+            till_number: darajaService.tillNumber,
+            party_b: darajaService.partyB,
+            transaction_type: darajaService.transactionType,
+            callback_url: darajaService.callbackUrl || "NOT_SET",
+            whatsapp_enabled: process.env.ENABLE_WHATSAPP === "true",
+            admin_key_configured: Boolean(process.env.ADMIN_SECRET_KEY),
         },
         total_logged_events: liveLogs.length,
     });
 });
 // Diagnostics test route (Tests Daraja OAuth and Supabase connectivity)
-app.get("/api/mpesa/test-diagnostics", async (_req, res) => {
+app.get("/api/mpesa/test-diagnostics", async (req, res) => {
+    if (!isAuthorizedAdmin(req)) {
+        res.status(401).json({ error: "Unauthorized: Admin key required in production" });
+        return;
+    }
     const results = { timestamp: new Date().toISOString() };
     // 1. Daraja OAuth test
     try {
@@ -71,7 +109,9 @@ app.get("/api/mpesa/test-diagnostics", async (_req, res) => {
         results.daraja_oauth = {
             status: "SUCCESS",
             token_preview: `${token.substring(0, 8)}...`,
-            environment: process.env.DARAJA_ENVIRONMENT || "sandbox",
+            environment: darajaService.environment,
+            party_b: darajaService.partyB,
+            transaction_type: darajaService.transactionType,
         };
         logEvent("SUCCESS", "Daraja OAuth self-test passed", results.daraja_oauth, "DIAGNOSTICS");
     }
@@ -107,14 +147,25 @@ app.get("/api/mpesa/test-diagnostics", async (_req, res) => {
     }
     res.json(results);
 });
-// Clear logs endpoint
-app.post("/api/mpesa/clear-logs", (_req, res) => {
+// Clear logs endpoint (Protected in production)
+app.post("/api/mpesa/clear-logs", (req, res) => {
+    if (!isAuthorizedAdmin(req)) {
+        res.status(401).json({ error: "Unauthorized: Admin key required in production" });
+        return;
+    }
     liveLogs.length = 0;
     logEvent("INFO", "Logs cleared by admin", undefined, "SYSTEM");
     res.json({ success: true, message: "Logs cleared" });
 });
-// Live log monitor endpoint (HTML + JSON)
+// Live log monitor endpoint (Protected in production)
 app.get("/api/mpesa/logs", (req, res) => {
+    if (!isAuthorizedAdmin(req)) {
+        res.status(401).send(`<!DOCTYPE html>
+<html><body style="font-family:sans-serif;background:#0f172a;color:#f87171;padding:40px;text-align:center;">
+<h2>401 Unauthorized</h2><p style="color:#94a3b8">Admin authentication required to access live logs in production.<br>Pass <code>?key=YOUR_ADMIN_SECRET_KEY</code> in the URL.</p>
+</body></html>`);
+        return;
+    }
     if (req.query.format === "json") {
         res.json(liveLogs);
         return;
@@ -145,7 +196,7 @@ app.get("/api/mpesa/logs", (req, res) => {
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>KSL Payments — Live System Monitor</title>
+  <title>KSL Payments - Live System Monitor</title>
   <meta http-equiv="refresh" content="4">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
@@ -171,22 +222,23 @@ app.get("/api/mpesa/logs", (req, res) => {
   <div class="header">
     <div>
       <h1>
-        ⚡ KSL M-Pesa Live System Monitor
+        KSL M-Pesa Live System Monitor
         <span class="live-badge"><span class="live-dot"></span> REAL-TIME (4s Auto-Refresh)</span>
       </h1>
-      <p style="margin:4px 0 0 0;font-size:13px;color:#94a3b8">Shows incoming STK pushes, Safaricom Daraja responses, callbacks, Supabase syncs, and errors.</p>
+      <p style="margin:4px 0 0 0;font-size:13px;color:#94a3b8">Shows incoming STK pushes, Daraja responses, callbacks, Supabase syncs, and errors (PII masked).</p>
     </div>
     <div class="actions">
-      <a href="/api/mpesa/test-diagnostics" target="_blank" class="btn">🔍 Run Self-Test</a>
-      <a href="/health" target="_blank" class="btn">🩺 View Health JSON</a>
-      <button onclick="clearLogs()">🗑️ Clear Logs</button>
+      <a href="/api/mpesa/test-diagnostics" target="_blank" class="btn">Run Self-Test</a>
+      <a href="/health" target="_blank" class="btn">View Health JSON</a>
+      <button onclick="clearLogs()">Clear Logs</button>
     </div>
   </div>
 
   <div class="stats">
-    <div class="stat-pill">Environment: <strong>${process.env.DARAJA_ENVIRONMENT || "sandbox"}</strong></div>
-    <div class="stat-pill">Shortcode: <strong>${process.env.DARAJA_BUSINESS_SHORTCODE || "174379"}</strong></div>
-    <div class="stat-pill">Type: <strong>${process.env.DARAJA_TRANSACTION_TYPE || "CustomerPayBillOnline"}</strong></div>
+    <div class="stat-pill">Environment: <strong>${darajaService.environment}</strong></div>
+    <div class="stat-pill">Shortcode: <strong>${darajaService.shortcode}</strong></div>
+    <div class="stat-pill">PartyB / Till: <strong>${darajaService.partyB}</strong></div>
+    <div class="stat-pill">Type: <strong>${darajaService.transactionType}</strong></div>
     <div class="stat-pill">Total Events: <strong>${liveLogs.length}</strong></div>
   </div>
 
@@ -226,6 +278,7 @@ app.listen(port, () => {
     logEvent("INFO", `KSL Payments server running on port ${port}`, {
         port,
         nodeEnv: process.env.NODE_ENV,
-        environment: process.env.DARAJA_ENVIRONMENT || "sandbox",
+        environment: darajaService.environment,
+        partyB: darajaService.partyB,
     }, "SYSTEM");
 });
