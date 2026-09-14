@@ -1,0 +1,10 @@
+﻿node_modules
+dist
+.git
+.github
+.env
+*.zip
+azure_logs
+azure_logs.zip
+deploy.zip
+*.md
