@@ -32,7 +32,7 @@ export function logEvent(level, message, details, tag = "GENERAL") {
     console.log(`[${entry.time}] [${level}] [${tag}] ${entry.message}`, maskedDetails ? maskedDetails : "");
 }
 // Strict CORS: Restrict to configured origins
-const allowedOrigins = (process.env.FRONTEND_URL || "http://localhost:5173,http://localhost:8080,https://ephphathakenya.co.ke")
+const allowedOrigins = (process.env.FRONTEND_URL || "https://learn.ephphathakenya.co.ke,https://ephphathakenya.co.ke,https://ephphathaclass.z28.web.core.windows.net,http://localhost:8080,http://localhost:5173,http://localhost:3000")
     .split(",")
     .map((o) => o.trim().replace(/\/$/, ""));
 app.use(cors({
