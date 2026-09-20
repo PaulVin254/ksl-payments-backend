@@ -2,3 +2,8 @@
 .env
 .DS_Store
 *.log
+
+# Server Logs and Deployment Zips
+azure_logs/
+*.zip
+deploy.zip
