@@ -92,13 +92,19 @@ app.use((req, _res, next) => {
   next();
 });
 
-// Admin Authorization Guard for sensitive endpoints
+// Admin Authorization Guard for sensitive endpoints (Fail-Closed)
 function isAuthorizedAdmin(req: express.Request): boolean {
-  if (process.env.NODE_ENV !== "production") return true;
-  const adminSecret = process.env.ADMIN_SECRET_KEY;
-  if (!adminSecret) return true; // If not configured, allow with warning
-  const key = req.headers["x-admin-key"] || req.query.key;
-  return key === adminSecret;
+  const adminSecret = process.env.ADMIN_SECRET_KEY?.trim();
+  // In production, strictly deny access if ADMIN_SECRET_KEY is not configured
+  if (!adminSecret) {
+    if (process.env.NODE_ENV === "production") {
+      logEvent("WARN", "Admin access denied: ADMIN_SECRET_KEY is not configured in production", undefined, "SECURITY");
+      return false;
+    }
+    return true; // only allow unauthenticated access in local development
+  }
+  const key = (req.headers["x-admin-key"] as string) || (req.query.key as string);
+  return Boolean(key && key.trim() === adminSecret);
 }
 
 // Health check endpoint

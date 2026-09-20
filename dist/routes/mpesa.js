@@ -194,9 +194,16 @@ mpesaRouter.post("/clear-cooldown", (req, res) => {
  */
 mpesaRouter.post("/callback", async (req, res) => {
     // 1. Webhook Secret Token Authentication Guard
-    const expectedSecret = (process.env.DARAJA_WEBHOOK_SECRET || "ksl_dev_secret_2026").trim();
+    const configuredSecret = process.env.DARAJA_WEBHOOK_SECRET?.trim();
+    const isProd = process.env.NODE_ENV === "production" || darajaService.environment === "production";
+    if (isProd && !configuredSecret) {
+        logEvent("ERROR", "Critical Security Alert: DARAJA_WEBHOOK_SECRET is not configured in production!", undefined, "SECURITY");
+        res.status(500).json({ ResultCode: 1, ResultDesc: "Server misconfiguration: Webhook secret not set" });
+        return;
+    }
+    const expectedSecret = configuredSecret || "ksl_dev_secret_2026";
     const providedToken = String(req.query.token || "").trim();
-    if (expectedSecret && providedToken !== expectedSecret) {
+    if (!providedToken || providedToken !== expectedSecret) {
         logEvent("WARN", "Unauthorized Daraja webhook attempt: secret token mismatch or missing", { query: req.query, ip: req.ip }, "SECURITY");
         res.status(401).json({ ResultCode: 1, ResultDesc: "Unauthorized: Invalid webhook secret token" });
         return;

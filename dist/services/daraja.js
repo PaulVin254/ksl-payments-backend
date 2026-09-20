@@ -46,7 +46,12 @@ export class DarajaService {
         const raw = (process.env.DARAJA_CALLBACK_URL || "").trim();
         if (!raw)
             return "";
-        const secret = (process.env.DARAJA_WEBHOOK_SECRET || "ksl_dev_secret_2026").trim();
+        const configuredSecret = process.env.DARAJA_WEBHOOK_SECRET?.trim();
+        if (!configuredSecret && this.environment === "production") {
+            logEvent("ERROR", "DARAJA_WEBHOOK_SECRET is missing in production environment!", undefined, "SECURITY");
+            throw new Error("DARAJA_WEBHOOK_SECRET is required in production mode");
+        }
+        const secret = configuredSecret || "ksl_dev_secret_2026";
         if (secret && !raw.includes("token=")) {
             const sep = raw.includes("?") ? "&" : "?";
             return `${raw}${sep}token=${encodeURIComponent(secret)}`;
