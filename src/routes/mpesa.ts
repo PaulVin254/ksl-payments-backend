@@ -402,9 +402,13 @@ mpesaRouter.post("/callback", async (req: Request, res: Response): Promise<void>
  * Features ACTIVE RECONCILIATION: If a payment is still pending after 25s,
  * actively queries Safaricom STK query to rescue dropped webhooks.
  */
-mpesaRouter.get("/status/:checkoutRequestId", async (req: Request, res: Response): Promise<void> => {
+const handleGetPaymentStatus = async (req: Request, res: Response): Promise<void> => {
   try {
-    const checkoutRequestId = String(req.params.checkoutRequestId);
+    const checkoutRequestId = String(req.params.checkoutRequestId || req.query.checkoutRequestId || "");
+    if (!checkoutRequestId) {
+      res.status(400).json({ success: false, error: "checkoutRequestId parameter is required" });
+      return;
+    }
 
     const { data, error } = await supabaseAdmin
       .from("payment_confirmations")
@@ -510,7 +514,10 @@ mpesaRouter.get("/status/:checkoutRequestId", async (req: Request, res: Response
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
   }
-});
+};
+
+mpesaRouter.get("/status/:checkoutRequestId", handleGetPaymentStatus);
+mpesaRouter.get("/query-stk", handleGetPaymentStatus);
 
 /**
  * POST /api/mpesa/simulate-success
