@@ -410,11 +410,21 @@ const handleGetPaymentStatus = async (req: Request, res: Response): Promise<void
       return;
     }
 
-    const { data, error } = await supabaseAdmin
+    const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(checkoutRequestId);
+    let dbQuery = supabaseAdmin
       .from("payment_confirmations")
-      .select("id, status, mpesa_receipt, amount_paid, full_name, phone_number, email, payment_tier, created_at, result_code, result_desc, failure_reason")
-      .eq("checkout_request_id", checkoutRequestId)
-      .single();
+      .select("id, status, mpesa_receipt, mpesa_code, amount_paid, full_name, phone_number, email, payment_tier, created_at, result_code, result_desc, failure_reason, intake_tag");
+
+    if (isUUID) {
+      dbQuery = dbQuery.or(`checkout_request_id.eq.${checkoutRequestId},mpesa_receipt.eq.${checkoutRequestId},mpesa_code.eq.${checkoutRequestId},id.eq.${checkoutRequestId}`);
+    } else {
+      dbQuery = dbQuery.or(`checkout_request_id.eq.${checkoutRequestId},mpesa_receipt.eq.${checkoutRequestId},mpesa_code.eq.${checkoutRequestId}`);
+    }
+
+    const { data, error } = await dbQuery
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     if (error || !data) {
       res.status(404).json({ success: false, error: "Transaction not found" });
@@ -518,6 +528,7 @@ const handleGetPaymentStatus = async (req: Request, res: Response): Promise<void
 
 mpesaRouter.get("/status/:checkoutRequestId", handleGetPaymentStatus);
 mpesaRouter.get("/query-stk", handleGetPaymentStatus);
+mpesaRouter.get("/receipt/:checkoutRequestId", handleGetPaymentStatus);
 
 /**
  * POST /api/mpesa/simulate-success
