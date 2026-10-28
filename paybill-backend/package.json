@@ -1,0 +1,38 @@
+{
+  "name": "business-paybill-backend",
+  "version": "1.0.0",
+  "description": "Production-ready M-Pesa Paybill Backend (STK Push + C2B) for Registered Business",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx watch src/index.ts",
+    "test:verify": "node verify_setup.mjs"
+  },
+  "keywords": [
+    "mpesa",
+    "daraja",
+    "paybill",
+    "stk-push",
+    "c2b",
+    "supabase",
+    "express"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.49.1",
+    "axios": "^1.7.9",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.13.8",
+    "tsx": "^4.19.3",
+    "typescript": "^5.8.2"
+  }
+}
