@@ -6,6 +6,7 @@ import { mapMpesaResultCode } from "../utils/mpesaErrors.js";
 import { handlePaymentSuccess } from "../services/postPayment.js";
 import { checkIpRateLimit, checkPhoneCooldown, clearPhoneCooldown } from "../utils/rateLimiter.js";
 import { logEvent } from "../index.js";
+import { handleGiftCallback } from "./gift.js";
 export const mpesaRouter = Router();
 /**
  * POST /api/mpesa/stkpush
@@ -218,6 +219,20 @@ mpesaRouter.post("/callback", async (req, res) => {
         }
         const { CheckoutRequestID, ResultCode, ResultDesc, CallbackMetadata } = callbackData;
         logEvent("INFO", `Daraja Callback received (ResultCode: ${ResultCode})`, { CheckoutRequestID, ResultDesc }, "CALLBACK");
+        // Graduation gift checkouts are handled separately (no class emails)
+        {
+            let giftReceipt = "";
+            let giftAmount = 0;
+            for (const item of CallbackMetadata?.Item || []) {
+                if (item.Name === "MpesaReceiptNumber")
+                    giftReceipt = String(item.Value);
+                if (item.Name === "Amount")
+                    giftAmount = Number(item.Value);
+            }
+            if (await handleGiftCallback(CheckoutRequestID, Number(ResultCode), giftReceipt, giftAmount)) {
+                return;
+            }
+        }
         // Idempotency Check: Fetch current record from DB
         const { data: existingRecord } = await supabaseAdmin
             .from("payment_confirmations")
@@ -318,14 +333,27 @@ mpesaRouter.post("/callback", async (req, res) => {
  * Features ACTIVE RECONCILIATION: If a payment is still pending after 25s,
  * actively queries Safaricom STK query to rescue dropped webhooks.
  */
-mpesaRouter.get("/status/:checkoutRequestId", async (req, res) => {
+const handleGetPaymentStatus = async (req, res) => {
     try {
-        const checkoutRequestId = String(req.params.checkoutRequestId);
-        const { data, error } = await supabaseAdmin
+        const checkoutRequestId = String(req.params.checkoutRequestId || req.query.checkoutRequestId || "");
+        if (!checkoutRequestId) {
+            res.status(400).json({ success: false, error: "checkoutRequestId parameter is required" });
+            return;
+        }
+        const isUUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(checkoutRequestId);
+        let dbQuery = supabaseAdmin
             .from("payment_confirmations")
-            .select("id, status, mpesa_receipt, amount_paid, full_name, phone_number, email, payment_tier, created_at, result_code, result_desc, failure_reason")
-            .eq("checkout_request_id", checkoutRequestId)
-            .single();
+            .select("id, status, mpesa_receipt, mpesa_code, amount_paid, full_name, phone_number, email, payment_tier, created_at, result_code, result_desc, failure_reason, intake_tag");
+        if (isUUID) {
+            dbQuery = dbQuery.or(`checkout_request_id.eq.${checkoutRequestId},mpesa_receipt.eq.${checkoutRequestId},mpesa_code.eq.${checkoutRequestId},id.eq.${checkoutRequestId}`);
+        }
+        else {
+            dbQuery = dbQuery.or(`checkout_request_id.eq.${checkoutRequestId},mpesa_receipt.eq.${checkoutRequestId},mpesa_code.eq.${checkoutRequestId}`);
+        }
+        const { data, error } = await dbQuery
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
         if (error || !data) {
             res.status(404).json({ success: false, error: "Transaction not found" });
             return;
@@ -410,7 +438,10 @@ mpesaRouter.get("/status/:checkoutRequestId", async (req, res) => {
     catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
-});
+};
+mpesaRouter.get("/status/:checkoutRequestId", handleGetPaymentStatus);
+mpesaRouter.get("/query-stk", handleGetPaymentStatus);
+mpesaRouter.get("/receipt/:checkoutRequestId", handleGetPaymentStatus);
 /**
  * POST /api/mpesa/simulate-success
  * Simulates a successful Daraja callback for testing in Sandbox.

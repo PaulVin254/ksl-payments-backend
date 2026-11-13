@@ -1,7 +1,8 @@
-﻿import "dotenv/config";
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { mpesaRouter } from "./routes/mpesa.js";
+import { giftRouter } from "./routes/gift.js";
 import { darajaService } from "./services/daraja.js";
 import { getSupabaseAdmin } from "./services/supabase.js";
 import { startReconciliationWorker } from "./services/reconciliationWorker.js";
@@ -51,6 +52,9 @@ export function logEvent(
   if (liveLogs.length > 200) liveLogs.pop(); // keep last 200 entries
   console.log(`[${entry.time}] [${level}] [${tag}] ${entry.message}`, maskedDetails ? maskedDetails : "");
 }
+
+// Fr. Anthony graduation gift API: public, own permissive CORS, mounted before the strict global CORS
+app.use("/api/gift", cors(), express.json(), giftRouter);
 
 // Strict CORS: Restrict to configured origins
 const allowedOrigins = (
