@@ -129,7 +129,7 @@ app.get("/health", (_req, res) => {
       till_number: darajaService.tillNumber,
       party_b: darajaService.partyB,
       transaction_type: darajaService.transactionType,
-      callback_url: darajaService.callbackUrl || "NOT_SET",
+      callback_url: darajaService.callbackUrl ? darajaService.callbackUrl.split("?")[0] : "NOT_SET",
       whatsapp_enabled: process.env.ENABLE_WHATSAPP === "true",
       admin_key_configured: Boolean(process.env.ADMIN_SECRET_KEY),
       webhook_secret_configured: Boolean(process.env.DARAJA_WEBHOOK_SECRET),
