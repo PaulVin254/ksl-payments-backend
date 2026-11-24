@@ -2,7 +2,6 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { mpesaRouter } from "./routes/mpesa.js";
-import { giftRouter } from "./routes/gift.js";
 import { darajaService } from "./services/daraja.js";
 import { getSupabaseAdmin } from "./services/supabase.js";
 import { startReconciliationWorker } from "./services/reconciliationWorker.js";
@@ -53,12 +52,9 @@ export function logEvent(
   console.log(`[${entry.time}] [${level}] [${tag}] ${entry.message}`, maskedDetails ? maskedDetails : "");
 }
 
-// Fr. Anthony graduation gift API: public, own permissive CORS, mounted before the strict global CORS
-app.use("/api/gift", cors(), express.json(), giftRouter);
-
 // Strict CORS: Restrict to configured origins
 const allowedOrigins = (
-  process.env.FRONTEND_URL || "https://olg.ephphathakenya.co.ke,https://franthonygift.z28.web.core.windows.net,https://learn.ephphathakenya.co.ke,https://ephphathakenya.co.ke,https://ephphathaclass.z28.web.core.windows.net,http://localhost:8080,http://localhost:5173,http://localhost:3000"
+  process.env.FRONTEND_URL || "https://learn.ephphathakenya.co.ke,https://ephphathakenya.co.ke,https://ephphathaclass.z28.web.core.windows.net,http://localhost:8080,http://localhost:5173,http://localhost:3000"
 )
   .split(",")
   .map((o) => o.trim().replace(/\/$/, ""));

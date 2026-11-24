@@ -6,7 +6,6 @@ import { mapMpesaResultCode } from "../utils/mpesaErrors.js";
 import { handlePaymentSuccess } from "../services/postPayment.js";
 import { checkIpRateLimit, checkPhoneCooldown, clearPhoneCooldown } from "../utils/rateLimiter.js";
 import { logEvent } from "../index.js";
-import { handleGiftCallback } from "./gift.js";
 
 export const mpesaRouter = Router();
 
@@ -273,19 +272,6 @@ mpesaRouter.post("/callback", async (req: Request, res: Response): Promise<void>
       { CheckoutRequestID, ResultDesc },
       "CALLBACK"
     );
-
-    // Graduation gift checkouts are handled separately (no class emails)
-    {
-      let giftReceipt = "";
-      let giftAmount = 0;
-      for (const item of CallbackMetadata?.Item || []) {
-        if (item.Name === "MpesaReceiptNumber") giftReceipt = String(item.Value);
-        if (item.Name === "Amount") giftAmount = Number(item.Value);
-      }
-      if (await handleGiftCallback(CheckoutRequestID, Number(ResultCode), giftReceipt, giftAmount)) {
-        return;
-      }
-    }
 
     // Idempotency Check: Fetch current record from DB
     const { data: existingRecord } = await supabaseAdmin
